@@ -75,7 +75,13 @@ export default function PerformanceReport() {
                 </div>
                 <p className="qbq-question">{q.questionText}</p>
                 <p className="qbq-answer">
-                  {q.answerTranscript ? `"${q.answerTranscript}"` : <em>No answer recorded.</em>}
+                  {q.answerTranscript?.includes("[Skipped") ? (
+                    <span className="badge-skipped">Question skipped by candidate</span>
+                  ) : q.answerTranscript ? (
+                    `"${q.answerTranscript}"`
+                  ) : (
+                    <em>No answer recorded.</em>
+                  )}
                 </p>
                 <div className="qbq-scores">
                   <MiniScore label="Communication" value={q.communicationScore} />

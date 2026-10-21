@@ -17,6 +17,8 @@ export default function InterviewSession() {
   const [lastResult, setLastResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isSkipping, setIsSkipping] = useState(false);
+  const [skipNotice, setSkipNotice] = useState(null);
 
   // Camera/mic for the live round. If the candidate already granted access
   // on the setup screen the browser won't prompt again — this just attaches
@@ -61,11 +63,49 @@ export default function InterviewSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  const fetchNextQuestion = async () => {
-    const type = answeredCount % 2 === 0 ? "BEHAVIORAL" : "TECHNICAL";
+  const fetchNextQuestion = async (overrideCount) => {
+    const count = typeof overrideCount === "number" ? overrideCount : answeredCount;
+    const type = count % 2 === 0 ? "BEHAVIORAL" : "TECHNICAL";
     const q = await api.nextQuestion(sessionId, type);
     setCurrentQuestion(q);
     setLastResult(null);
+  };
+
+  const handleSkip = async () => {
+    if (!currentQuestion || isSkipping) return;
+    setIsSkipping(true);
+    setError(null);
+    try {
+      const result = await api.submitAnswer(sessionId, {
+        questionId: currentQuestion.id,
+        transcript: "[Skipped by candidate]",
+        paceScore: 0.0,
+        pauseScore: 0.0,
+        fillerScore: 0.0,
+        pitchScore: 0.0,
+        responseTimeSeconds: 0
+      });
+
+      setSession((prev) => ({ ...prev, currentDifficulty: result.nextDifficulty }));
+
+      const nextCount = answeredCount + 1;
+      setAnsweredCount(nextCount);
+
+      if (nextCount >= MAX_QUESTIONS) {
+        setSkipNotice("Final question skipped. Proceeding to coding assessment...");
+        setTimeout(() => navigate(`/coding/${sessionId}`), 900);
+      } else {
+        const difficultyLabels = { 1: "Very Easy", 2: "Easy", 3: "Medium", 4: "Hard", 5: "Very Hard" };
+        const diffText = difficultyLabels[result.nextDifficulty] || result.nextDifficulty;
+        setSkipNotice(`Question ${answeredCount + 1} skipped. Next question calibrated to ${diffText}.`);
+        await fetchNextQuestion(nextCount);
+        setTimeout(() => setSkipNotice(null), 3200);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsSkipping(false);
+    }
   };
 
   const handleAnswer = async (transcript, responseTimeSeconds) => {
@@ -136,7 +176,24 @@ export default function InterviewSession() {
           </p>
           <p className="question-text">{currentQuestion?.questionText}</p>
 
-          <MicCapture onResult={handleAnswer} disabled={!currentQuestion} />
+          {skipNotice && (
+            <div className="alert-skip-notice">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="16" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12.01" y2="8" />
+              </svg>
+              <span>{skipNotice}</span>
+            </div>
+          )}
+
+          <MicCapture
+            key={currentQuestion?.id || answeredCount}
+            onResult={handleAnswer}
+            onSkip={handleSkip}
+            disabled={!currentQuestion || Boolean(lastResult)}
+            isSkipping={isSkipping}
+          />
 
           {lastResult && (
             <div className="result-panel">
@@ -149,7 +206,7 @@ export default function InterviewSession() {
                 <strong>{lastResult.nextDifficulty}</strong> based on this answer.
               </p>
               {answeredCount < MAX_QUESTIONS && (
-                <button className="btn btn-primary" onClick={fetchNextQuestion}>
+                <button className="btn btn-primary" onClick={() => fetchNextQuestion()}>
                   Next question
                 </button>
               )}

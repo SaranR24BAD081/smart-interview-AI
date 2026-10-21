@@ -16,10 +16,11 @@ import React, { useEffect, useRef, useState } from "react";
  */
 const MAX_SILENT_RESTARTS = 6;
 
-export default function MicCapture({ onResult, disabled }) {
+export default function MicCapture({ onResult, onSkip, disabled, isSkipping }) {
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [statusMessage, setStatusMessage] = useState(null); // { type: 'error'|'info', text }
+  const [showSkipConfirm, setShowSkipConfirm] = useState(false);
 
   const recognitionRef = useRef(null);
   const restartTimeoutRef = useRef(null);
@@ -199,6 +200,30 @@ export default function MicCapture({ onResult, disabled }) {
     setRecording(false);
   };
 
+  const handleInitiateSkip = () => {
+    if (recording) {
+      manualStopRef.current = true;
+      submittedRef.current = true;
+      clearTimeout(restartTimeoutRef.current);
+      recognitionRef.current?.abort?.();
+      setRecording(false);
+    }
+    setShowSkipConfirm(true);
+  };
+
+  const handleConfirmSkip = () => {
+    setShowSkipConfirm(false);
+    setTranscript("");
+    confirmedTranscriptRef.current = "";
+    if (onSkip) {
+      onSkip();
+    }
+  };
+
+  const handleCancelSkip = () => {
+    setShowSkipConfirm(false);
+  };
+
   return (
     <div className="mic-capture">
       <textarea
@@ -213,15 +238,72 @@ export default function MicCapture({ onResult, disabled }) {
       )}
       <div className="mic-controls">
         {!recording ? (
-          <button className="btn btn-record" onClick={start} disabled={disabled}>
+          <button
+            type="button"
+            className="btn btn-record"
+            onClick={start}
+            disabled={disabled || isSkipping || showSkipConfirm}
+          >
             <span className="record-dot" />
             Start answering
           </button>
         ) : (
-          <button className="btn btn-danger" onClick={stop}>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={stop}
+            disabled={disabled || isSkipping}
+          >
             <span className="record-dot recording" />
             Stop &amp; submit
           </button>
+        )}
+
+        {onSkip && !showSkipConfirm && (
+          <button
+            type="button"
+            className="btn btn-skip"
+            onClick={handleInitiateSkip}
+            disabled={disabled || isSkipping}
+            title="Cannot answer this question? Click to skip"
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polygon points="5 4 15 12 5 20 5 4" fill="currentColor" />
+              <line x1="19" y1="5" x2="19" y2="19" />
+            </svg>
+            {isSkipping ? "Skipping..." : "Skip question"}
+          </button>
+        )}
+
+        {onSkip && showSkipConfirm && (
+          <div className="skip-confirm-inline">
+            <span className="skip-confirm-prompt">Skip this question?</span>
+            <button
+              type="button"
+              className="btn btn-skip-confirm"
+              onClick={handleConfirmSkip}
+              disabled={isSkipping}
+            >
+              {isSkipping ? "Skipping..." : "Yes, skip"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-skip-cancel"
+              onClick={handleCancelSkip}
+              disabled={isSkipping}
+            >
+              Cancel
+            </button>
+          </div>
         )}
       </div>
     </div>
