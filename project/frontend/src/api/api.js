@@ -13,12 +13,6 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  // Authentication
-  login: (payload) =>
-    request("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
-  register: (payload) =>
-    request("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
-
   // Section III-A: Resume Analyzer / session lifecycle
   startSession: (payload) =>
     request("/sessions", { method: "POST", body: JSON.stringify(payload) }),
@@ -33,20 +27,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  skipQuestion: (sessionId, questionId) =>
-    request(`/sessions/${sessionId}/questions/skip`, {
-      method: "POST",
-      body: JSON.stringify({ questionId })
-    }),
   listQuestions: (sessionId) => request(`/sessions/${sessionId}/questions`),
 
   // Section III-F: Coding round
+  getCodingProblems: (sessionId) =>
+    request(`/sessions/${sessionId}/coding/problems`),
   nextCodingProblem: (sessionId) =>
     request(`/sessions/${sessionId}/coding/next`, { method: "POST" }),
-  changeLanguage: (sessionId, language) =>
-    request(`/sessions/${sessionId}/coding/language`, {
+  runCode: (sessionId, payload) =>
+    request(`/sessions/${sessionId}/coding/run`, {
       method: "POST",
-      body: JSON.stringify({ language })
+      body: JSON.stringify(payload)
     }),
   submitCode: (sessionId, payload) =>
     request(`/sessions/${sessionId}/coding/submit`, {

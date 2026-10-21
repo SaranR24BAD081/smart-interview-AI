@@ -76,32 +76,25 @@ public class QuestionController {
 
     /**
      * Section III-D + III-E: accepts the STT transcript and client-measured
-     * paralinguistic features for a question, scores it (Eq. 2), determines
-     * correctness, generates feedback, and updates adaptive difficulty (Eq. 3).
+     * paralinguistic features for a question, scores it (Eq. 2), and updates
+     * the session's adaptive difficulty for the next question (Eq. 3).
      */
     @PostMapping("/answer")
-    public Map<String, Object> submitAnswer(@PathVariable Long sessionId,
-                                            @RequestBody AnswerSubmitRequest req) {
+    public Map<String, Object> submitAnswer(@PathVariable Long sessionId, @RequestBody AnswerSubmitRequest req) {
         InterviewSession session = getSession(sessionId);
         Question question = questionRepository.findById(req.getQuestionId())
                 .orElseThrow(() -> new IllegalArgumentException("Question not found: " + req.getQuestionId()));
 
-        double confidence    = speechAnalysisService.confidenceScore(
+        double confidence = speechAnalysisService.confidenceScore(
                 req.getPaceScore(), req.getPauseScore(), req.getFillerScore(), req.getPitchScore());
         double communication = speechAnalysisService.communicationScore(
                 req.getTranscript(), question.getQuestionText(), confidence);
-        double performance   = speechAnalysisService.performanceScore(communication, confidence);
-        boolean correct      = speechAnalysisService.analyzeCorrectness(performance);
-        String feedback      = speechAnalysisService.generateFeedback(
-                req.getTranscript(), question.getQuestionText(),
-                confidence, communication, performance, correct);
+        double performance = speechAnalysisService.performanceScore(communication, confidence);
 
         question.setAnswerTranscript(req.getTranscript());
         question.setConfidenceScore(confidence);
         question.setCommunicationScore(communication);
         question.setPerformanceScore(performance);
-        question.setAnswerCorrect(correct);
-        question.setFeedback(feedback);
         questionRepository.save(question);
 
         int nextDifficulty = adaptiveDifficultyService.nextDifficulty(session.getCurrentDifficulty(), performance);
@@ -109,47 +102,9 @@ public class QuestionController {
         sessionRepository.save(session);
 
         return Map.of(
-                "confidenceScore",    confidence,
+                "confidenceScore", confidence,
                 "communicationScore", communication,
-                "performanceScore",   performance,
-                "nextDifficulty",     nextDifficulty,
-                "answerCorrect",      correct,
-                "feedback",           feedback
-        );
-    }
-
-    /**
-     * Allows the candidate to skip a question they don't know the answer to.
-     * The question is marked as skipped with a penalised performance score
-     * so the adaptive difficulty controller can ease back appropriately.
-     */
-    @PostMapping("/skip")
-    public Map<String, Object> skipQuestion(@PathVariable Long sessionId,
-                                            @RequestBody Map<String, Long> body) {
-        InterviewSession session = getSession(sessionId);
-        Long questionId = body.get("questionId");
-        Question question = questionRepository.findById(questionId)
-                .orElseThrow(() -> new IllegalArgumentException("Question not found: " + questionId));
-
-        double penaltyPerformance = 0.20;
-        String skipFeedback = "Question skipped. That's okay — use it as a learning opportunity. " +
-                "Review the topic related to this question before your real interview.";
-
-        question.setSkipped(true);
-        question.setAnswerCorrect(false);
-        question.setFeedback(skipFeedback);
-        question.setPerformanceScore(penaltyPerformance);
-        question.setConfidenceScore(0.0);
-        question.setCommunicationScore(0.0);
-        questionRepository.save(question);
-
-        int nextDifficulty = adaptiveDifficultyService.nextDifficulty(session.getCurrentDifficulty(), penaltyPerformance);
-        session.setCurrentDifficulty(nextDifficulty);
-        sessionRepository.save(session);
-
-        return Map.of(
-                "skipped",        true,
-                "feedback",       skipFeedback,
+                "performanceScore", performance,
                 "nextDifficulty", nextDifficulty
         );
     }

@@ -66,6 +66,8 @@ public class ReportService {
         for (CodingSubmission s : submissions) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("title", s.getTitle());
+            entry.put("difficulty", s.getDifficulty());
+            entry.put("conceptName", s.getConceptName());
             entry.put("problemStatement", s.getProblemStatement());
             entry.put("language", s.getLanguage());
             entry.put("candidateCode", s.getCandidateCode());

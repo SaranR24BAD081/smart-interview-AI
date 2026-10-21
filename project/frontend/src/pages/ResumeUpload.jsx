@@ -1,16 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
+import mammoth from "mammoth";
 import { api } from "../api/api.js";
 
 // Match the worker to whatever pdfjs-dist version is actually installed,
 // served from cdnjs so we don't have to fight Vite's worker bundling.
-// Use a CDN worker URL – fall back to empty string (main-thread parsing) if blocked
-try {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-} catch (_) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "";
-}
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+const PRESET_ROLES = [
+  "Backend Java Developer",
+  "Python / AI Engineer",
+  "C / C++ Systems Engineer",
+  "Full Stack Developer",
+  "Frontend React Developer",
+  "Data Scientist / Data Analyst",
+  "DevOps & Cloud Engineer",
+  "Software Development Engineer (SDE)"
+];
 
 const RUBRIC = [
   {
@@ -63,76 +70,61 @@ export default function ResumeUpload() {
     }
   };
 
-  const readFileAsText = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target.result || "");
-      reader.onerror = () => reject(new Error("FileReader failed"));
-      reader.readAsText(file);
-    });
-
   const handleFile = async (file) => {
     if (!file) return;
     setError(null);
     setFileName(file.name);
 
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    const lowerName = file.name.toLowerCase();
+    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
+    const isDocx = lowerName.endsWith(".docx") || file.type.includes("wordprocessingml");
+    const isDoc = lowerName.endsWith(".doc") || file.type.includes("msword");
+    const isTxt = file.type === "text/plain" || lowerName.endsWith(".txt");
+
+    if (!isPdf && !isDocx && !isDoc && !isTxt) {
+      setError("Please upload a PDF, Word (.docx, .doc), or TXT resume, or paste the text below.");
+      setFileName("");
+      return;
+    }
 
     setParsing(true);
     try {
       if (isPdf) {
-        // Try PDF.js first; if it fails for any reason fall back to raw text read
+        const buffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+        let text = "";
+        for (let p = 1; p <= pdf.numPages; p++) {
+          const page = await pdf.getPage(p);
+          const content = await page.getTextContent();
+          text += content.items.map((item) => item.str).join(" ") + "\n";
+        }
+        setResumeText(text.trim());
+      } else if (isDocx) {
+        const buffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+        setResumeText(result.value.trim());
+      } else if (isDoc) {
+        const buffer = await file.arrayBuffer();
         try {
-          const buffer = await file.arrayBuffer();
-          const loadingTask = pdfjsLib.getDocument({
-            data: buffer,
-            verbosity: 0 // suppress console warnings
-          });
-          const pdf = await loadingTask.promise;
-          let text = "";
-          for (let p = 1; p <= pdf.numPages; p++) {
-            const page = await pdf.getPage(p);
-            const content = await page.getTextContent();
-            text += content.items.map((item) => item.str).join(" ") + "\n";
-          }
-          const trimmed = text.trim();
-          if (trimmed.length > 20) {
-            setResumeText(trimmed);
+          const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+          if (result.value && result.value.trim().length > 10) {
+            setResumeText(result.value.trim());
           } else {
-            // PDF had no extractable text (scanned image); fall back
-            throw new Error("No text layer in PDF");
+            throw new Error("Fallback text decoding for legacy .doc");
           }
-        } catch (pdfErr) {
-          console.warn("PDF.js parse failed, falling back to text read:", pdfErr.message);
-          // Best-effort text read for image-only or protected PDFs
-          try {
-            const raw = await readFileAsText(file);
-            const cleaned = raw.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
-            if (cleaned.length > 20) {
-              setResumeText(cleaned);
-            } else {
-              setError(
-                "This PDF doesn't have selectable text (it may be scanned). Please paste your resume text in the box below."
-              );
-              setFileName("");
-            }
-          } catch {
-            setError("Couldn't read the PDF. Please paste your resume text in the box below.");
-            setFileName("");
-          }
+        } catch {
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+          const raw = decoder.decode(buffer);
+          const cleanText = raw.replace(/[^\x20-\x7E\t\n\r]/g, " ").replace(/\s{2,}/g, " ").trim();
+          setResumeText(cleanText);
         }
       } else {
-        // For every other file type (.txt, .doc, .docx, .rtf, etc.) read as text
-        try {
-          const raw = await readFileAsText(file);
-          // Strip non-printable chars that appear in binary Office formats
-          const cleaned = raw.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
-          setResumeText(cleaned || raw.trim());
-        } catch {
-          setError("Couldn't read that file. Please paste your resume text in the box below.");
-          setFileName("");
-        }
+        setResumeText((await file.text()).trim());
       }
+    } catch (err) {
+      console.error(err);
+      setError("Couldn't read that file — try a different export, or paste the text below instead.");
+      setFileName("");
     } finally {
       setParsing(false);
     }
@@ -143,13 +135,17 @@ export default function ResumeUpload() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
-    if (!candidateName || !jobRole || !resumeText) {
+    if (!candidateName.trim() || !jobRole.trim() || !resumeText.trim()) {
       setError("Please fill in your name, job role, and resume text.");
       return;
     }
     setLoading(true);
     try {
-      const session = await api.startSession({ candidateName, jobRole, resumeText });
+      const session = await api.startSession({
+        candidateName: candidateName.trim(),
+        jobRole: jobRole.trim(),
+        resumeText: resumeText.trim()
+      });
       navigate(`/interview/${session.id}`);
     } catch (err) {
       setError(err.message);
@@ -158,7 +154,15 @@ export default function ResumeUpload() {
     }
   };
 
-  const ready = candidateName && jobRole && resumeText;
+  const handleRoleSelect = (role) => {
+    if (role === "custom") {
+      setJobRole("");
+    } else {
+      setJobRole(role);
+    }
+  };
+
+  const ready = candidateName.trim() && jobRole.trim() && resumeText.trim();
 
   return (
     <div className="page-container">
@@ -182,18 +186,48 @@ export default function ResumeUpload() {
               type="text"
               value={candidateName}
               onChange={(e) => setCandidateName(e.target.value)}
-              placeholder="Enter Your Name"
+              placeholder="Enter your name"
+              required
             />
           </label>
 
           <label>
             Target job role
-            <input
-              type="text"
-              value={jobRole}
-              onChange={(e) => setJobRole(e.target.value)}
-              placeholder="Enter Your Job Role"
-            />
+            <div className="role-selection-wrapper">
+              <select
+                className="role-dropdown"
+                value={PRESET_ROLES.includes(jobRole) ? jobRole : (jobRole ? "custom" : "")}
+                onChange={(e) => handleRoleSelect(e.target.value)}
+              >
+                <option value="">Select a job role...</option>
+                {PRESET_ROLES.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+                <option value="custom">Other / Custom role</option>
+              </select>
+
+              <input
+                type="text"
+                value={jobRole}
+                onChange={(e) => setJobRole(e.target.value)}
+                placeholder="Enter your job role"
+                required
+              />
+
+              <div className="role-quick-chips">
+                <span className="chips-label">Popular:</span>
+                {PRESET_ROLES.slice(0, 5).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    className={`role-chip ${jobRole === r ? "active" : ""}`}
+                    onClick={() => setJobRole(r)}
+                  >
+                    {r.replace(" Developer", "").replace(" Engineer", "")}
+                  </button>
+                ))}
+              </div>
+            </div>
           </label>
 
           <label>
@@ -227,13 +261,13 @@ export default function ResumeUpload() {
                     <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
                   </svg>
                   <span>Drop your resume here or <strong>browse</strong></span>
-                  <span className="dz-hint">PDF, DOCX, TXT or any file — up to 8 MB</span>
+                  <span className="dz-hint">PDF, Word (.docx, .doc), or TXT, up to 10MB</span>
                 </>
               )}
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="*"
+                accept=".pdf,.txt,.docx,.doc,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
                 onChange={(e) => handleFile(e.target.files?.[0])}
                 hidden
               />
@@ -272,7 +306,7 @@ export default function ResumeUpload() {
                 <span>
                   {camState === "denied"
                     ? "Access denied — check your browser's site settings"
-                    : "Grant Panelist camera and mic access"}
+                    : "Grant camera and mic access"}
                 </span>
               </div>
             )}

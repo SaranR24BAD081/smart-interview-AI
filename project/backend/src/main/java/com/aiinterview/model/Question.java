@@ -42,19 +42,6 @@ public class Question {
     /** Overall performance score p_t in [0,1] used to drive Eq. 3. */
     private Double performanceScore;
 
-    /**
-     * Whether the candidate's answer was judged correct/relevant.
-     * Null = not yet answered.
-     */
-    private Boolean answerCorrect;
-
-    /** Human-readable feedback explaining the verdict. */
-    @Lob
-    private String feedback;
-
-    /** True if the candidate explicitly skipped this question. */
-    private boolean skipped = false;
-
     public enum QuestionType {
         BEHAVIORAL, TECHNICAL, CODING
     }

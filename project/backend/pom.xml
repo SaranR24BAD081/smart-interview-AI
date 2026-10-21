@@ -27,17 +27,6 @@
     <java.version>17</java.version>
   </properties>
 
-  <dependencyManagement>
-    <dependencies>
-      <!-- Pin to resolve conflicting transitive version warnings -->
-      <dependency>
-        <groupId>org.apache.maven.plugin-tools</groupId>
-        <artifactId>maven-plugin-annotations</artifactId>
-        <version>3.11.0</version>
-      </dependency>
-    </dependencies>
-  </dependencyManagement>
-
   <dependencies>
     <dependency>
       <groupId>org.springframework.boot</groupId>

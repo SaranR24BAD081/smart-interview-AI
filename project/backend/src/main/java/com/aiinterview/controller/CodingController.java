@@ -11,17 +11,12 @@ import com.aiinterview.service.ResumeAnalyzerService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
- * Section III-F: Coding Question Generator + Code Editor (backend half --
- * problem generation and automated assessment; the editor UI itself is a
- * LeetCode-style split view in frontend/src/pages/CodingRound.jsx).
+ * Section III-F: Coding Question Generator + Code Assessment Controller.
+ * Supports multiple programming languages (Java, Python, C, C++, JavaScript),
+ * visible and hidden test case evaluation, syntax/error checking, and LeetCode-style diagnostics.
  */
 @RestController
 @RequestMapping("/api/sessions/{sessionId}/coding")
@@ -35,11 +30,11 @@ public class CodingController {
     private final ObjectMapper objectMapper;
 
     public CodingController(InterviewSessionRepository sessionRepository,
-                             CodingSubmissionRepository submissionRepository,
-                             CodingQuestionService codingQuestionService,
-                             CodeEvaluationService codeEvaluationService,
-                             ResumeAnalyzerService resumeAnalyzerService,
-                             ObjectMapper objectMapper) {
+                            CodingSubmissionRepository submissionRepository,
+                            CodingQuestionService codingQuestionService,
+                            CodeEvaluationService codeEvaluationService,
+                            ResumeAnalyzerService resumeAnalyzerService,
+                            ObjectMapper objectMapper) {
         this.sessionRepository = sessionRepository;
         this.submissionRepository = submissionRepository;
         this.codingQuestionService = codingQuestionService;
@@ -48,127 +43,160 @@ public class CodingController {
         this.objectMapper = objectMapper;
     }
 
-    /** Generates a new coding problem, matched to the candidate's resume, at the session's current adaptive difficulty.
-     *  Already-used question titles for this session are excluded so every question is unique. */
-    @PostMapping("/next")
-    public CodingSubmission nextProblem(@PathVariable Long sessionId) {
-        InterviewSession session = getSession(sessionId);
+    public static final int CODING_PROBLEMS_COUNT = 3;
 
-        // Collect titles of questions already served in this session
+    /**
+     * Retrieves all 3 coding problems for this session, generating them if not already created.
+     */
+    @GetMapping("/problems")
+    public List<CodingSubmission> getProblems(@PathVariable Long sessionId) {
+        InterviewSession session = getSession(sessionId);
         List<CodingSubmission> existing = submissionRepository.findBySessionIdOrderByIdAsc(sessionId);
-        Set<String> usedTitles = new HashSet<>();
+
+        if (existing.size() >= CODING_PROBLEMS_COUNT) {
+            return existing;
+        }
+
+        int needed = CODING_PROBLEMS_COUNT - existing.size();
+        Set<String> usedConcepts = new HashSet<>();
         for (CodingSubmission s : existing) {
-            if (s.getTitle() != null) usedTitles.add(s.getTitle());
+            if (s.getConceptName() != null && !s.getConceptName().isBlank()) {
+                usedConcepts.add(s.getConceptName());
+            }
         }
 
         List<String> rankedSkills = resumeAnalyzerService.rankedSkillsForRole(
                 session.getResumeText(), session.getJobRole());
-        CodingQuestionService.Problem problem =
-                codingQuestionService.generateProblem(
-                        session.getCurrentDifficulty(), session.getJobRole(),
-                        rankedSkills, usedTitles);
 
+        List<CodingQuestionService.Problem> generated = codingQuestionService.generateProblems(
+                session.getCurrentDifficulty(), session.getJobRole(), rankedSkills, needed, usedConcepts);
+
+        List<CodingSubmission> saved = new ArrayList<>(existing);
+        for (CodingQuestionService.Problem problem : generated) {
+            CodingSubmission submission = createSubmissionFromProblem(session, problem);
+            saved.add(submissionRepository.save(submission));
+        }
+
+        session.setStatus(InterviewSession.SessionStatus.CODING_ROUND);
+        sessionRepository.save(session);
+
+        return saved;
+    }
+
+    /** Returns the next unsubmitted problem, or the first problem. */
+    @PostMapping("/next")
+    public CodingSubmission nextProblem(@PathVariable Long sessionId) {
+        List<CodingSubmission> problems = getProblems(sessionId);
+        for (CodingSubmission s : problems) {
+            if (s.getScore() == null) {
+                return s;
+            }
+        }
+        return problems.get(0);
+    }
+
+    private CodingSubmission createSubmissionFromProblem(InterviewSession session, CodingQuestionService.Problem problem) {
         CodingSubmission submission = new CodingSubmission();
         submission.setSession(session);
-        submission.setDifficulty(session.getCurrentDifficulty());
+        submission.setDifficulty(problem.difficulty());
         submission.setTitle(problem.title());
+        submission.setConceptName(problem.conceptName());
         submission.setProblemStatement(problem.statement());
         submission.setExamplesJson(toJson(problem.examples()));
         submission.setConstraintsJson(toJson(problem.constraints()));
+        submission.setStartersJson(toJson(problem.starters()));
+        submission.setTestCasesJson(toJson(problem.testCases()));
         submission.setExpectedTokensCsv(String.join(",", problem.requiredTokens()));
         submission.setCheckLabelsJson(toJson(problem.checkLabels()));
         submission.setLanguage(problem.language());
         submission.setStarterCode(problem.starterCode());
-
-        // Note: we deliberately do NOT touch session.getCodingSubmissions() here.
-        // That collection is LAZY and open-in-view is disabled, so reading/adding
-        // to it outside a transaction throws "could not initialize proxy - no
-        // Session". submission.setSession(session) above already sets the FK;
-        // saving the submission directly is all persistence needs.
-        session.setStatus(InterviewSession.SessionStatus.CODING_ROUND);
-        sessionRepository.save(session);
-
-        return submissionRepository.save(submission);
+        return submission;
     }
 
-    /** Evaluates submitted code against the expected building blocks for its problem. */
-    @PostMapping("/submit")
-    public Map<String, Object> submitCode(@PathVariable Long sessionId, @RequestBody CodeSubmitRequest req) {
+    /** Runs the candidate's code against visible test cases only (LeetCode 'Run' button). */
+    @PostMapping("/run")
+    public Map<String, Object> runCode(@PathVariable Long sessionId, @RequestBody CodeSubmitRequest req) {
         CodingSubmission submission = submissionRepository.findById(req.getSubmissionId())
                 .orElseThrow(() -> new IllegalArgumentException("Submission not found: " + req.getSubmissionId()));
 
-        // Back-compat for submissions created before these fields existed.
         List<String> expectedTokens = (submission.getExpectedTokensCsv() == null || submission.getExpectedTokensCsv().isBlank())
                 ? codingQuestionService.generateProblem(submission.getDifficulty(), null).requiredTokens()
                 : Arrays.asList(submission.getExpectedTokensCsv().split(","));
         List<String> checkLabels = fromJsonList(submission.getCheckLabelsJson());
 
-        CodeEvaluationService.EvaluationResult result = codeEvaluationService.evaluate(
-                codeEvaluationService.stripStarter(req.getCode(), submission.getStarterCode()),
-                expectedTokens, checkLabels);
+        String lang = req.getLanguage() != null && !req.getLanguage().isBlank() ? req.getLanguage() : submission.getLanguage();
+
+        CodeEvaluationService.EvaluationResult result = codeEvaluationService.evaluateDetailed(
+                req.getCode(),
+                lang,
+                submission.getStarterCode(),
+                submission.getConceptName(),
+                submission.getTestCases(),
+                expectedTokens,
+                checkLabels,
+                false // isSubmit = false: run only visible test cases
+        );
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", result.status);
+        response.put("testsPassed", result.testsPassed);
+        response.put("testsTotal", result.testsTotal);
+        response.put("score", result.score);
+        response.put("runtimeMs", result.runtimeMs);
+        response.put("memoryMb", result.memoryMb);
+        response.put("errorMessage", result.errorMessage);
+        response.put("testResults", result.testResults);
+        response.put("checks", result.checks);
+        return response;
+    }
+
+    /** Evaluates submitted code against all test cases including hidden test cases (LeetCode 'Submit' button). */
+    @PostMapping("/submit")
+    public Map<String, Object> submitCode(@PathVariable Long sessionId, @RequestBody CodeSubmitRequest req) {
+        CodingSubmission submission = submissionRepository.findById(req.getSubmissionId())
+                .orElseThrow(() -> new IllegalArgumentException("Submission not found: " + req.getSubmissionId()));
+
+        List<String> expectedTokens = (submission.getExpectedTokensCsv() == null || submission.getExpectedTokensCsv().isBlank())
+                ? codingQuestionService.generateProblem(submission.getDifficulty(), null).requiredTokens()
+                : Arrays.asList(submission.getExpectedTokensCsv().split(","));
+        List<String> checkLabels = fromJsonList(submission.getCheckLabelsJson());
+
+        String lang = req.getLanguage() != null && !req.getLanguage().isBlank() ? req.getLanguage() : submission.getLanguage();
+
+        CodeEvaluationService.EvaluationResult result = codeEvaluationService.evaluateDetailed(
+                req.getCode(),
+                lang,
+                submission.getStarterCode(),
+                submission.getConceptName(),
+                submission.getTestCases(),
+                expectedTokens,
+                checkLabels,
+                true // isSubmit = true: run visible + hidden test cases
+        );
 
         submission.setCandidateCode(req.getCode());
-        // language stays as chosen when the problem was generated (java/python/javascript)
+        submission.setLanguage(lang);
         submission.setTestsPassed(result.testsPassed);
         submission.setTestsTotal(result.testsTotal);
         submission.setScore(result.score);
         submissionRepository.save(submission);
 
-        return Map.of(
-                "testsPassed", result.testsPassed,
-                "testsTotal", result.testsTotal,
-                "score", result.score,
-                "checks", result.checks
-        );
-    }
-
-    /**
-     * Regenerates the current coding problem in the given language
-     * (java | python | javascript | c). Called when the candidate
-     * switches language from the frontend language selector.
-     */
-    @PostMapping("/language")
-    public CodingSubmission changeLanguage(@PathVariable Long sessionId,
-                                           @RequestBody Map<String, String> body) {
-        InterviewSession session = getSession(sessionId);
-        String language = body.getOrDefault("language", "javascript").toLowerCase();
-
-        // Validate
-        if (!List.of("java", "python", "javascript", "c").contains(language)) {
-            throw new IllegalArgumentException("Unsupported language: " + language);
-        }
-
-        List<String> rankedSkills = resumeAnalyzerService.rankedSkillsForRole(
-                session.getResumeText(), session.getJobRole());
-
-        // Force the desired language by passing it as the first ranked skill
-        // so detectLanguage() picks it up immediately.
-        List<String> skillsWithLang = new ArrayList<>();
-        skillsWithLang.add(language);
-        skillsWithLang.addAll(rankedSkills);
-
-        CodingQuestionService.Problem problem =
-                codingQuestionService.generateProblem(session.getCurrentDifficulty(), language, skillsWithLang);
-
-        CodingSubmission submission = new CodingSubmission();
-        submission.setSession(session);
-        submission.setDifficulty(session.getCurrentDifficulty());
-        submission.setTitle(problem.title());
-        submission.setProblemStatement(problem.statement());
-        submission.setExamplesJson(toJson(problem.examples()));
-        submission.setConstraintsJson(toJson(problem.constraints()));
-        submission.setExpectedTokensCsv(String.join(",", problem.requiredTokens()));
-        submission.setCheckLabelsJson(toJson(problem.checkLabels()));
-        submission.setLanguage(language);
-        submission.setStarterCode(problem.starterCode());
-        session.setStatus(InterviewSession.SessionStatus.CODING_ROUND);
-        sessionRepository.save(session);
-        return submissionRepository.save(submission);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", result.status);
+        response.put("testsPassed", result.testsPassed);
+        response.put("testsTotal", result.testsTotal);
+        response.put("score", result.score);
+        response.put("runtimeMs", result.runtimeMs);
+        response.put("memoryMb", result.memoryMb);
+        response.put("errorMessage", result.errorMessage);
+        response.put("testResults", result.testResults);
+        response.put("checks", result.checks);
+        return response;
     }
 
     @GetMapping
     public List<CodingSubmission> listSubmissions(@PathVariable Long sessionId) {
-        return submissionRepository.findBySessionIdOrderByIdAsc(sessionId);
+        return getProblems(sessionId);
     }
 
     private InterviewSession getSession(Long id) {

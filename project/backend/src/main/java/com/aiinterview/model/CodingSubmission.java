@@ -29,6 +29,8 @@ public class CodingSubmission {
 
     private String title;
 
+    private String conceptName;
+
     @Lob
     private String problemStatement;
 
@@ -41,6 +43,16 @@ public class CodingSubmission {
     @JsonIgnore
     @Lob
     private String constraintsJson;
+
+    /** JSON map of language -> starter code string (java, python, c, cpp, javascript). */
+    @JsonIgnore
+    @Lob
+    private String startersJson;
+
+    /** JSON array of test case objects {"id": 1, "name": "Case 1", "input": "...", "expectedOutput": "...", "hidden": false}. */
+    @JsonIgnore
+    @Lob
+    private String testCasesJson;
 
     /**
      * Comma-separated tokens CodeEvaluationService checks the candidate's code
@@ -65,8 +77,8 @@ public class CodingSubmission {
     @Lob
     private String candidateCode;
 
-    /** javascript | java | python -- chosen from the job role / resume. */
-    private String language = "javascript";
+    /** javascript | java | python | c | cpp -- chosen from the job role / resume or switched by user. */
+    private String language = "java";
 
     private int testsPassed;
 
@@ -76,7 +88,7 @@ public class CodingSubmission {
     private Double score;
 
     // ---- Derived, read-only JSON views for the frontend (kept separate from
-    // the raw *Json storage fields above so Jackson serializes real arrays
+    // the raw *Json storage fields above so Jackson serializes real arrays/maps
     // instead of escaped JSON strings). ----
 
     public List<Map<String, String>> getExamples() {
@@ -85,6 +97,19 @@ public class CodingSubmission {
 
     public List<String> getConstraints() {
         return parseList(constraintsJson, new TypeReference<>() {});
+    }
+
+    public Map<String, String> getStarters() {
+        if (startersJson == null || startersJson.isBlank()) return Map.of();
+        try {
+            return JSON.readValue(startersJson, new TypeReference<>() {});
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    public List<Map<String, Object>> getTestCases() {
+        return parseList(testCasesJson, new TypeReference<>() {});
     }
 
     private <T> List<T> parseList(String json, TypeReference<List<T>> type) {

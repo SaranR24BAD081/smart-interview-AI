@@ -90,15 +90,43 @@ export default function PerformanceReport() {
 
       {report.codingBreakdown?.length > 0 && (
         <div className="card">
-          <h3 className="card-title">Coding round</h3>
-          {report.codingBreakdown.map((c, i) => (
-            <div className="qbq-item" key={i}>
-              <div className="qbq-head">
-                <span className="qbq-index">{c.title} &middot; {c.language}</span>
-                <span className="qbq-index">{c.testsPassed} / {c.testsTotal} checks &middot; {Math.round((c.score || 0) * 100)}%</span>
+          <h3 className="card-title">Coding Assessment ({report.codingBreakdown.length} Problems)</h3>
+          <p className="hint qbq-intro">Summary of performance across all programming problems in the coding round.</p>
+          <div className="qbq-list">
+            {report.codingBreakdown.map((c, i) => (
+              <div className="qbq-item" key={i}>
+                <div className="qbq-head">
+                  <span className="qbq-index">
+                    Problem {i + 1} &middot; {c.title} &middot; Diff {c.difficulty || 1} &middot; {c.language}
+                  </span>
+                  <span className={`qbq-mini-score ${c.score >= 1.0 ? "score-pass" : "score-partial"}`}>
+                    {c.testsPassed} / {c.testsTotal} tests passed ({Math.round((c.score || 0) * 100)}%)
+                  </span>
+                </div>
+                {c.problemStatement && (
+                  <p className="qbq-question" style={{ fontSize: "0.9rem", color: "var(--muted)", fontWeight: "normal" }}>
+                    {c.problemStatement}
+                  </p>
+                )}
+                {c.candidateCode && (
+                  <details style={{ marginTop: "8px", fontSize: "0.85rem" }}>
+                    <summary style={{ cursor: "pointer", color: "var(--primary)" }}>View submitted {c.language} solution</summary>
+                    <pre style={{
+                      marginTop: "6px",
+                      padding: "10px",
+                      background: "#1e1e2e",
+                      color: "#cdd6f4",
+                      borderRadius: "6px",
+                      overflowX: "auto",
+                      fontFamily: "monospace"
+                    }}>
+                      {c.candidateCode}
+                    </pre>
+                  </details>
+                )}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 

@@ -1,28 +1,13 @@
 import React from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
-import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
+import { Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar.jsx";
 import FlowStepper from "./components/FlowStepper.jsx";
 import ResumeUpload from "./pages/ResumeUpload.jsx";
 import InterviewSession from "./pages/InterviewSession.jsx";
 import CodingRound from "./pages/CodingRound.jsx";
 import PerformanceReport from "./pages/PerformanceReport.jsx";
-import Login from "./pages/Login.jsx";
-import CreateAccount from "./pages/CreateAccount.jsx";
 
-/** Redirects unauthenticated users to /login */
-function ProtectedRoute({ children }) {
-  const { isAuthenticated } = useAuth();
-  return isAuthenticated ? children : <Navigate to="/login" replace />;
-}
-
-/** Redirects already-authenticated users away from auth pages */
-function AuthRoute({ children }) {
-  const { isAuthenticated } = useAuth();
-  return isAuthenticated ? <Navigate to="/" replace /> : children;
-}
-
-function AppShell() {
+export default function App() {
   return (
     <div className="shell">
       <Sidebar />
@@ -40,41 +25,5 @@ function AppShell() {
         </main>
       </div>
     </div>
-  );
-}
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <Routes>
-        {/* Auth pages (public) */}
-        <Route
-          path="/login"
-          element={
-            <AuthRoute>
-              <Login />
-            </AuthRoute>
-          }
-        />
-        <Route
-          path="/create-account"
-          element={
-            <AuthRoute>
-              <CreateAccount />
-            </AuthRoute>
-          }
-        />
-
-        {/* Protected app shell + all inner routes */}
-        <Route
-          path="/*"
-          element={
-            <ProtectedRoute>
-              <AppShell />
-            </ProtectedRoute>
-          }
-        />
-      </Routes>
-    </AuthProvider>
   );
 }

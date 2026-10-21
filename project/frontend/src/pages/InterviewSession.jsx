@@ -16,10 +16,11 @@ export default function InterviewSession() {
   const [answeredCount, setAnsweredCount] = useState(0);
   const [lastResult, setLastResult] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [skipping, setSkipping] = useState(false);
   const [error, setError] = useState(null);
 
+  // Camera/mic for the live round. If the candidate already granted access
+  // on the setup screen the browser won't prompt again — this just attaches
+  // a fresh stream to the video element here.
   const [camState, setCamState] = useState("idle"); // idle | granted | denied
   const selfViewRef = useRef(null);
   const streamRef = useRef(null);
@@ -29,7 +30,10 @@ export default function InterviewSession() {
     navigator.mediaDevices
       ?.getUserMedia({ video: true, audio: true })
       .then((stream) => {
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         streamRef.current = stream;
         if (selfViewRef.current) selfViewRef.current.srcObject = stream;
         setCamState("granted");
@@ -70,7 +74,6 @@ export default function InterviewSession() {
       return;
     }
     setError(null);
-    setSubmitting(true);
     try {
       const words = transcript.trim().split(/\s+/).length;
       const wpm = responseTimeSeconds > 0 ? (words / responseTimeSeconds) * 60 : 120;
@@ -88,53 +91,21 @@ export default function InterviewSession() {
         responseTimeSeconds
       });
 
-      setLastResult({ ...result, skipped: false });
+      setLastResult(result);
       setSession((prev) => ({ ...prev, currentDifficulty: result.nextDifficulty }));
 
       const nextCount = answeredCount + 1;
       setAnsweredCount(nextCount);
+
       if (nextCount >= MAX_QUESTIONS) {
-        setTimeout(() => navigate(`/coding/${sessionId}`), 2000);
+        setTimeout(() => navigate(`/coding/${sessionId}`), 1200);
       }
     } catch (err) {
       setError(err.message);
-    } finally {
-      setSubmitting(false);
     }
-  };
-
-  const handleSkip = async () => {
-    if (!currentQuestion) return;
-    setError(null);
-    setSkipping(true);
-    try {
-      // Fire-and-forget the skip record to the backend
-      await api.skipQuestion(sessionId, currentQuestion.id);
-
-      const nextCount = answeredCount + 1;
-      setAnsweredCount(nextCount);
-
-      if (nextCount >= MAX_QUESTIONS) {
-        navigate(`/coding/${sessionId}`);
-      } else {
-        // Go straight to next question — no analysis panel shown
-        await fetchNextQuestion();
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSkipping(false);
-    }
-  };
-
-  const handleNext = async () => {
-    setLastResult(null);
-    await fetchNextQuestion();
   };
 
   if (loading) return <div className="page-container">Loading session...</div>;
-
-  const isLastQuestion = answeredCount >= MAX_QUESTIONS;
 
   return (
     <div className="page-container">
@@ -161,36 +132,28 @@ export default function InterviewSession() {
 
         <div className="card question-card">
           <p className="question-index">
-            Question {Math.min(answeredCount + 1, MAX_QUESTIONS)} of {MAX_QUESTIONS} &middot; {currentQuestion?.type}
+            Question {answeredCount + 1} of {MAX_QUESTIONS} &middot; {currentQuestion?.type}
           </p>
           <p className="question-text">{currentQuestion?.questionText}</p>
 
-          {/* Answer input — hidden after result is shown */}
-          {!lastResult && (
-            <>
-              <MicCapture onResult={handleAnswer} disabled={!currentQuestion || submitting} />
+          <MicCapture onResult={handleAnswer} disabled={!currentQuestion} />
 
-              <div className="skip-row">
-                <button
-                  className="btn btn-skip"
-                  onClick={handleSkip}
-                  disabled={!currentQuestion || skipping || submitting}
-                  title="Skip this question"
-                >
-                  {skipping ? "Skipping…" : "⏭ Skip this question"}
-                </button>
-                <span className="skip-hint">Skip if you don't know the answer</span>
-              </div>
-            </>
-          )}
-
-          {/* Analysis panel — shown after answer or skip */}
           {lastResult && (
-            <AnalysisPanel
-              result={lastResult}
-              isLast={isLastQuestion}
-              onNext={handleNext}
-            />
+            <div className="result-panel">
+              <h3>Answer analysis</h3>
+              <ScoreBar label="Communication" value={lastResult.communicationScore} />
+              <ScoreBar label="Confidence" value={lastResult.confidenceScore} />
+              <ScoreBar label="Overall performance" value={lastResult.performanceScore} />
+              <p className="hint">
+                Next question difficulty adjusted to{" "}
+                <strong>{lastResult.nextDifficulty}</strong> based on this answer.
+              </p>
+              {answeredCount < MAX_QUESTIONS && (
+                <button className="btn btn-primary" onClick={fetchNextQuestion}>
+                  Next question
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -198,60 +161,6 @@ export default function InterviewSession() {
   );
 }
 
-/* ─── Analysis Panel ─────────────────────────────────────────────── */
-function AnalysisPanel({ result, isLast, onNext }) {
-  const correct = result.answerCorrect;
-  const skipped = result.skipped;
-
-  const verdict = skipped
-    ? { label: "Skipped", icon: "⏭️", cls: "verdict-skip" }
-    : correct
-      ? { label: "Correct", icon: "✅", cls: "verdict-correct" }
-      : { label: "Needs Improvement", icon: "❌", cls: "verdict-incorrect" };
-
-  return (
-    <div className={`analysis-panel ${verdict.cls}`}>
-      {/* Verdict banner */}
-      <div className="verdict-banner">
-        <span className="verdict-icon">{verdict.icon}</span>
-        <span className="verdict-label">{verdict.label}</span>
-      </div>
-
-      {/* Feedback text */}
-      {result.feedback && (
-        <p className="analysis-feedback">{result.feedback}</p>
-      )}
-
-      {/* Score bars — only for answered (not skipped) */}
-      {!skipped && (
-        <div className="score-bars">
-          <ScoreBar label="Communication" value={result.communicationScore} correct={correct} />
-          <ScoreBar label="Confidence"    value={result.confidenceScore}    correct={correct} />
-          <ScoreBar label="Performance"   value={result.performanceScore}   correct={correct} />
-        </div>
-      )}
-
-      {/* Difficulty adjustment note */}
-      <p className="difficulty-note">
-        Next question difficulty adjusted to{" "}
-        <strong className="diff-value">{result.nextDifficulty}</strong>
-        {skipped ? " (easier — question was skipped)." : correct ? " (harder — good answer!)." : " (slightly easier)."}
-      </p>
-
-      {/* CTA */}
-      {!isLast && (
-        <button className="btn btn-primary analysis-next-btn" onClick={onNext}>
-          Next question →
-        </button>
-      )}
-      {isLast && (
-        <p className="hint">Proceeding to the coding round…</p>
-      )}
-    </div>
-  );
-}
-
-/* ─── Helper components ──────────────────────────────────────────── */
 function QuestionProgress({ current, total }) {
   return (
     <div className="q-progress">
@@ -262,14 +171,13 @@ function QuestionProgress({ current, total }) {
   );
 }
 
-function ScoreBar({ label, value, correct }) {
+function ScoreBar({ label, value }) {
   const pct = Math.round((value || 0) * 100);
-  const fillClass = pct >= 60 ? "score-fill-good" : pct >= 40 ? "score-fill-mid" : "score-fill-low";
   return (
     <div className="score-bar">
-      <span className="score-label">{label}: <strong>{pct}%</strong></span>
+      <span className="score-label">{label}: {pct}%</span>
       <div className="score-track">
-        <div className={`score-fill ${fillClass}`} style={{ width: `${pct}%` }} />
+        <div className="score-fill" style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
